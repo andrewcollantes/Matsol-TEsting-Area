@@ -1,86 +1,71 @@
-const { getDb, persistDb } = require('./memory');
-
-function cloneClient(client) {
-  return { ...client };
-}
+const db = require("./mysql");
 
 function normalizeClientId(clientId) {
-  return String(clientId || '').trim().toLowerCase();
+  return String(clientId || "").trim().toLowerCase();
 }
 
 async function listClients() {
-  const db = await getDb();
-  return db.clients.slice().sort((a, b) => a.name.localeCompare(b.name)).map(cloneClient);
+  const [rows] = await db.query(
+    "SELECT id, name, location, status FROM clients ORDER BY name"
+  );
+  return rows;
 }
 
 async function listActiveClients() {
-  const db = await getDb();
-  return db.clients
-    .filter(client => client.status !== 'inactive')
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map(cloneClient);
+  const [rows] = await db.query(
+    "SELECT id, name, location, status FROM clients WHERE status != 'inactive' ORDER BY name"
+  );
+  return rows;
 }
 
 async function findClientById(clientId) {
-  const db = await getDb();
-  const key = normalizeClientId(clientId);
-  const found = db.clients.find(client => client.id === key);
-  return found ? cloneClient(found) : null;
+  const [rows] = await db.execute(
+    "SELECT id, name, location, status FROM clients WHERE id = ?",
+    [normalizeClientId(clientId)]
+  );
+  return rows[0] || null;
 }
 
 async function findActiveClientByName(name) {
-  const key = String(name || '').trim().toLowerCase();
-  const db = await getDb();
-  const found = db.clients.find(client => String(client.name || '').trim().toLowerCase() === key && client.status !== 'inactive');
-  return found ? cloneClient(found) : null;
+  const [rows] = await db.execute(
+    "SELECT id, name, location, status FROM clients WHERE LOWER(name) = ? AND status != 'inactive'",
+    [String(name || "").trim().toLowerCase()]
+  );
+  return rows[0] || null;
 }
 
 async function createClient(client) {
-  const db = await getDb();
-  const id = normalizeClientId(client.id);
-  if (db.clients.some(existing => existing.id === id)) {
-    return false;
-  }
-
-  db.clients.push({
-    id,
-    name: String(client.name || '').trim(),
-    location: String(client.location || '').trim(),
-    status: String(client.status || 'active')
-  });
-
-  await persistDb();
-
+  await db.execute(
+    "INSERT INTO clients (id, name, location, status) VALUES (?, ?, ?, ?)",
+    [
+      normalizeClientId(client.id),
+      String(client.name || "").trim(),
+      String(client.location || "").trim(),
+      String(client.status || "active")
+    ]
+  );
   return true;
 }
 
 async function updateClient(clientId, updates) {
-  const db = await getDb();
-  const key = normalizeClientId(clientId);
-  const target = db.clients.find(client => client.id === key);
-
-  if (!target) {
-    return false;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(updates, 'name')) {
-    target.name = String(updates.name || '').trim();
-  }
-  if (Object.prototype.hasOwnProperty.call(updates, 'location')) {
-    target.location = String(updates.location || '').trim();
-  }
-  if (Object.prototype.hasOwnProperty.call(updates, 'status')) {
-    target.status = String(updates.status || 'active');
-  }
-
-  await persistDb();
-
+  await db.execute(
+    "UPDATE clients SET name = ?, location = ?, status = ? WHERE id = ?",
+    [
+      String(updates.name || "").trim(),
+      String(updates.location || "").trim(),
+      String(updates.status || "active"),
+      normalizeClientId(clientId)
+    ]
+  );
   return true;
 }
 
 async function setClientStatus(clientId, status) {
-  return updateClient(clientId, { status });
+  await db.execute(
+    "UPDATE clients SET status = ? WHERE id = ?",
+    [String(status || "active"), normalizeClientId(clientId)]
+  );
+  return true;
 }
 
 module.exports = {

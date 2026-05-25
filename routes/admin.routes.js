@@ -185,12 +185,6 @@ function makeActivityLabel(activityKind) {
   if (activityKind === 'installed') {
     return 'Unit Installed';
   }
-  if (activityKind === 'pull_out') {
-    return 'Pull Out';
-  }
-  if (activityKind === 'cannibalize') {
-    return 'Cannibalize';
-  }
   if (activityKind === 'maintenance_parts') {
     return 'Maintenance + Parts';
   }
@@ -201,34 +195,6 @@ function makeActivityLabel(activityKind) {
     return 'Maintenance';
   }
   return 'Update';
-}
-
-function normalizeUpdateActivityKind(update, { hasMaintenance, hasParts }) {
-  const raw = String(update && update.activityType || '').trim().toLowerCase();
-
-  if (raw === 'pull out') {
-    return 'pull_out';
-  }
-  if (raw === 'cannibalize') {
-    return 'cannibalize';
-  }
-  if (raw === 'parts replacement') {
-    return 'parts';
-  }
-  if (raw === 'preventive maintenance') {
-    return hasParts ? 'maintenance_parts' : 'maintenance';
-  }
-
-  if (hasMaintenance && hasParts) {
-    return 'maintenance_parts';
-  }
-  if (hasMaintenance) {
-    return 'maintenance';
-  }
-  if (hasParts) {
-    return 'parts';
-  }
-  return 'maintenance';
 }
 
 function summarizePartList(parts = [], limit = 3) {
@@ -374,7 +340,6 @@ function buildMonitorActivityRows(machines = []) {
       const partsSummary = summarizePartList(update && update.partsUpdated);
       const hasMaintenance = Boolean(update && update.maintenanceUpdated);
       const hasParts = Array.isArray(update && update.partsUpdated) && update.partsUpdated.length > 0;
-      const activityKind = normalizeUpdateActivityKind(update, { hasMaintenance, hasParts });
 
       const updateReportContributors = update && update.report ? getReportContributors(update.report) : [];
       const technicianNames = updateReportContributors.length
@@ -393,23 +358,7 @@ function buildMonitorActivityRows(machines = []) {
         .join(' • ');
 
       const emitRows = [];
-      if (activityKind === 'pull_out') {
-        emitRows.push({
-          activityKind: 'pull_out',
-          activityTags: ['pull_out'],
-          activityLabel: makeActivityLabel('pull_out'),
-          partsLabel: 'Entire unit pulled out',
-          partsCsv: ''
-        });
-      } else if (activityKind === 'cannibalize') {
-        emitRows.push({
-          activityKind: 'cannibalize',
-          activityTags: ['cannibalize'],
-          activityLabel: makeActivityLabel('cannibalize'),
-          partsLabel: hasParts ? partsSummary.label : 'No parts selected',
-          partsCsv: hasParts ? partsSummary.csv : ''
-        });
-      } else if (activityKind === 'maintenance_parts') {
+      if (hasMaintenance && hasParts) {
         emitRows.push({
           activityKind: 'maintenance_parts',
           activityTags: ['maintenance', 'parts'],
@@ -417,7 +366,7 @@ function buildMonitorActivityRows(machines = []) {
           partsLabel: partsSummary.label,
           partsCsv: partsSummary.csv
         });
-      } else if (activityKind === 'maintenance') {
+      } else if (hasMaintenance) {
         emitRows.push({
           activityKind: 'maintenance',
           activityTags: ['maintenance'],
@@ -425,7 +374,7 @@ function buildMonitorActivityRows(machines = []) {
           partsLabel: 'Maintenance service',
           partsCsv: ''
         });
-      } else if (activityKind === 'parts') {
+      } else if (hasParts) {
         emitRows.push({
           activityKind: 'parts',
           activityTags: ['parts'],

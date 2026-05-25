@@ -21,6 +21,32 @@ function splitTechnicianNames(value) {
     .filter(Boolean);
 }
 
+function buildSavedAssetFromBody(body = {}) {
+  return {
+    clientId: String(body.clientId || '').trim().toLowerCase(),
+    unit: body.unit || '',
+    model: String(body.model || '').toUpperCase().trim(),
+    serialNo: body.serialNo || '',
+    dateInstalled: body.dateInstalled || '',
+    runningHours: body.runningHours || '',
+    status: body.status || '',
+    description: body.description || ''
+  };
+}
+
+function renderNewMachineForm(res, req, { activeClients, teamMembers, selectedClientId = '', error = null, success = null, savedAsset = null }) {
+  return res.render('user_asset_form', {
+    currentUser: req.session.user,
+    clients: activeClients,
+    teamMembers,
+    selectedClientId,
+    success,
+    error,
+    savedAsset,
+    partsCatalog: PARTS_CATALOG
+  });
+}
+
 // Parts catalog with all models and their parts
 const PARTS_CATALOG = {
   CIJ: {
@@ -153,152 +179,149 @@ router.post('/new-machine', requireAuth, async (req, res) => {
     .filter(name => String(name).trim().toLowerCase() !== currentFullName)
     .filter((name, index, arr) => arr.indexOf(name) === index)
     .sort((a, b) => a.localeCompare(b));
-  let { clientId, unit, model, serialNo, dateInstalled, runningHours, status, description } = req.body;
-  const problem = String(req.body.problem || '').trim();
-  const action = String(req.body.action || '').trim();
-  const recommendation = String(req.body.recommendation || '').trim();
-  const refNo = String(req.body.refNo || '').trim();
-  description = String(description || '').trim();
-  const techniciansInput = String(req.body.technicians || '');
 
-  clientId = String(clientId || '').trim().toLowerCase();
+  try {
+    let { clientId, unit, model, serialNo, dateInstalled, runningHours, status, description } = req.body;
+    const problem = String(req.body.problem || '').trim();
+    const action = String(req.body.action || '').trim();
+    const recommendation = String(req.body.recommendation || '').trim();
+    description = String(description || '').trim();
+    const techniciansInput = String(req.body.technicians || '');
 
-  // Normalize model to uppercase for consistency
-  if (model) {
-    model = model.toUpperCase().trim();
-  }
+    clientId = String(clientId || '').trim().toLowerCase();
 
-  // Enforce available model list for the selected unit.
-  const unitKey = Object.keys(PARTS_CATALOG).find(
-    key => key.toUpperCase() === String(unit || '').toUpperCase().trim()
-  );
-  const allowedModels = unitKey
-    ? Object.keys(PARTS_CATALOG[unitKey] || {})
-    : [];
-
-  if (!allowedModels.length) {
-    return res.render('user_asset_form', {
-      currentUser: req.session.user,
-      clients: activeClients,
-      teamMembers,
-      selectedClientId: clientId || '',
-      success: null,
-      error: 'No available models for the selected unit.',
-      savedAsset: null,
-      partsCatalog: PARTS_CATALOG
-    });
-  }
-
-  const isModelAllowed = allowedModels.some(m => m.toUpperCase() === model);
-  if (!isModelAllowed) {
-    return res.render('user_asset_form', {
-      currentUser: req.session.user,
-      clients: activeClients,
-      teamMembers,
-      selectedClientId: clientId || '',
-      success: null,
-      error: 'Invalid model for the selected unit.',
-      savedAsset: {
-        clientId,
-        unit,
-        model,
-        serialNo,
-        dateInstalled,
-        runningHours,
-        status,
-        description
-      },
-      partsCatalog: PARTS_CATALOG
-    });
-  }
-
-  // Fallback: if clientId is empty but clientName was submitted, match by name.
-  if (!clientId && req.body.clientName) {
-    const matched = await findActiveClientByName(req.body.clientName);
-    if (matched) clientId = matched.id;
-  }
-
-  // Validate all required fields including unit
-  if (!clientId || !unit || !model || !serialNo || !dateInstalled || !runningHours || !status || !description || !problem || !action || !recommendation || !refNo) {
-    return res.render('user_asset_form', {
-      currentUser: req.session.user,
-      clients: activeClients,
-      teamMembers,
-      selectedClientId: clientId || '',
-      success: null,
-      error: 'Please fill in all required fields (Client, Unit, Model, Serial No, Date Installed, Running Hours, Status, Description, Problem, Action, Recommendation, Reference No).',
-      savedAsset: null,
-      partsCatalog: PARTS_CATALOG
-    });
-  }
-
-  const client = await findClientById(clientId);
-
-  // Convert date format into dd/mm/yyyy for consistent display/storage
-  let installedDate = dateInstalled || '';
-  const ymdMatch = installedDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (ymdMatch) {
-    installedDate = `${ymdMatch[3]}/${ymdMatch[2]}/${ymdMatch[1]}`;
-  }
-
-  const dmyMatch = installedDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (dmyMatch) {
-    const day = String(dmyMatch[1]).padStart(2, '0');
-    const month = String(dmyMatch[2]).padStart(2, '0');
-    const year = dmyMatch[3];
-    installedDate = `${day}/${month}/${year}`;
-  }
-
-  const asset = {
-    clientId,
-    clientName: client ? client.name : 'Unknown Client',
-    location: client ? client.location : 'Unknown',
-    unit,
-    model,
-    serialNo,
-    dateInstalled: installedDate,
-    runningHours,
-    status,
-    description,
-    submittedBy: req.session.user
-      ? req.session.user.fullName || req.session.user.username || 'Unknown User'
-      : 'Unknown User'
-  };
-
-  const submittedBy = normalizeTechnicianName(asset.submittedBy) || 'Unknown User';
-  const additionalTechnicians = splitTechnicianNames(techniciansInput)
-    .filter((name, idx, arr) => arr.findIndex(v => v.toLowerCase() === name.toLowerCase()) === idx)
-    .filter(name => name.toLowerCase() !== submittedBy.toLowerCase());
-  const technicians = [submittedBy, ...additionalTechnicians]
-    .filter(Boolean)
-    .filter((name, idx, arr) => arr.findIndex(v => v.toLowerCase() === name.toLowerCase()) === idx);
-
-  asset.reports = [
-    {
-      date: installedDate,
-      submittedBy,
-      updateIndex: null,
-      technicians,
-      problem,
-      action,
-      recommendation,
-      refNo
+    // Fallback: if clientId is empty but clientName was submitted, match by name.
+    if (!clientId && req.body.clientName) {
+      const matched = await findActiveClientByName(req.body.clientName);
+      if (matched) clientId = matched.id;
     }
-  ];
-  asset.technicians = technicians;
 
-  await addMachine(asset);
+    // Normalize model to uppercase for consistency.
+    if (model) {
+      model = model.toUpperCase().trim();
+    }
 
-  res.render('user_asset_form', {
-    currentUser: req.session.user,
-    clients: activeClients,
-    teamMembers,
-    selectedClientId: clientId,
-    success: 'Printer asset request submitted successfully.',
-    error: null,
-    savedAsset: asset,
-    partsCatalog: PARTS_CATALOG
-  });
+    const unitKey = Object.keys(PARTS_CATALOG).find(
+      key => key.toUpperCase() === String(unit || '').toUpperCase().trim()
+    );
+
+    if (!unitKey) {
+      return renderNewMachineForm(res, req, {
+        activeClients,
+        teamMembers,
+        selectedClientId: clientId || '',
+        error: 'Invalid unit type.',
+        savedAsset: buildSavedAssetFromBody({ ...req.body, clientId })
+      });
+    }
+
+    // If a unit has predefined models, enforce them. If the catalog is empty
+    // for that unit, allow manual model entry instead of blocking the save.
+    const allowedModels = Object.keys(PARTS_CATALOG[unitKey] || {});
+    const isModelAllowed = !allowedModels.length || allowedModels.some(m => m.toUpperCase() === model);
+
+    if (!isModelAllowed) {
+      return renderNewMachineForm(res, req, {
+        activeClients,
+        teamMembers,
+        selectedClientId: clientId || '',
+        error: 'Invalid model for the selected unit.',
+        savedAsset: buildSavedAssetFromBody({ ...req.body, clientId, model })
+      });
+    }
+
+    if (!clientId || !unit || !model || !serialNo || !dateInstalled || runningHours === undefined || runningHours === '' || !status || !description || !problem || !action || !recommendation) {
+      return renderNewMachineForm(res, req, {
+        activeClients,
+        teamMembers,
+        selectedClientId: clientId || '',
+        error: 'Please fill in all required fields (Client, Unit, Model, Serial No, Date Installed, Running Hours, Status, Description, Problem, Action, Recommendation).',
+        savedAsset: buildSavedAssetFromBody({ ...req.body, clientId, model })
+      });
+    }
+
+    const client = await findClientById(clientId);
+    if (!client) {
+      return renderNewMachineForm(res, req, {
+        activeClients,
+        teamMembers,
+        selectedClientId: clientId || '',
+        error: 'Client was not found. Please select a client from the dropdown list.',
+        savedAsset: buildSavedAssetFromBody({ ...req.body, clientId, model })
+      });
+    }
+
+    // Convert date format into dd/mm/yyyy for consistent display/storage.
+    let installedDate = dateInstalled || '';
+    const ymdMatch = installedDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (ymdMatch) {
+      installedDate = `${ymdMatch[3]}/${ymdMatch[2]}/${ymdMatch[1]}`;
+    }
+
+    const dmyMatch = installedDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (dmyMatch) {
+      const day = String(dmyMatch[1]).padStart(2, '0');
+      const month = String(dmyMatch[2]).padStart(2, '0');
+      const year = dmyMatch[3];
+      installedDate = `${day}/${month}/${year}`;
+    }
+
+    const asset = {
+      clientId,
+      clientName: client.name,
+      location: client.location,
+      unit: unitKey,
+      model,
+      serialNo,
+      dateInstalled: installedDate,
+      runningHours,
+      status,
+      description,
+      submittedBy: req.session.user
+        ? req.session.user.fullName || req.session.user.username || 'Unknown User'
+        : 'Unknown User'
+    };
+
+    const submittedBy = normalizeTechnicianName(asset.submittedBy) || 'Unknown User';
+    const additionalTechnicians = splitTechnicianNames(techniciansInput)
+      .filter((name, idx, arr) => arr.findIndex(v => v.toLowerCase() === name.toLowerCase()) === idx)
+      .filter(name => name.toLowerCase() !== submittedBy.toLowerCase());
+    const technicians = [submittedBy, ...additionalTechnicians]
+      .filter(Boolean)
+      .filter((name, idx, arr) => arr.findIndex(v => v.toLowerCase() === name.toLowerCase()) === idx);
+
+    asset.reports = [
+      {
+        date: installedDate,
+        submittedBy,
+        updateIndex: null,
+        technicians,
+        problem,
+        action,
+        recommendation
+      }
+    ];
+    asset.technicians = technicians;
+
+    await addMachine(asset);
+
+    return renderNewMachineForm(res, req, {
+      activeClients,
+      teamMembers,
+      selectedClientId: clientId,
+      success: 'Printer asset request submitted successfully.',
+      savedAsset: asset
+    });
+  } catch (error) {
+    console.error('Failed to save machine:', error);
+    return renderNewMachineForm(res, req, {
+      activeClients,
+      teamMembers,
+      selectedClientId: String(req.body.clientId || '').trim().toLowerCase(),
+      error: `Failed to save machine: ${error.message}`,
+      savedAsset: buildSavedAssetFromBody(req.body)
+    });
+  }
 });
 
 module.exports = router;

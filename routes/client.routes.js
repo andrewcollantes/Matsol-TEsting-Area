@@ -67,13 +67,11 @@ router.post('/:clientId/machines/update', requireAuth, async (req, res) => {
     runningHours,
     status,
     description,
-    activityType,
     maintenanceServiceDate,
     partServiceDates,
     partServiceHours,
     updates
   } = req.body || {};
-    const { report, updateIndex } = req.body || {};
 
   if (!serialNo || !model || !dateInstalled) {
     return res.status(400).json({ ok: false, error: 'Missing machine identity fields.' });
@@ -88,26 +86,7 @@ router.post('/:clientId/machines/update', requireAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Status is required.' });
   }
 
-  const VALID_ACTIVITY_TYPES = new Set(['Preventive Maintenance', 'Parts Replacement', 'Pull Out', 'Cannibalize', 'Parts Return']);
-  const safeActivityType = activityType && VALID_ACTIVITY_TYPES.has(String(activityType))
-    ? String(activityType)
-    : 'Preventive Maintenance';
-
   const safeUpdates = Array.isArray(updates) ? updates : [];
-    const safeReport = report && typeof report === 'object'
-      ? {
-          date: String(report.date || ''),
-          submittedBy: String(report.submittedBy || ''),
-          updateIndex: Number.isInteger(Number(updateIndex)) && Number(updateIndex) >= 0 ? Number(updateIndex) : null,
-          technicians: Array.isArray(report.technicians)
-            ? report.technicians.map(name => String(name || '').trim()).filter(Boolean)
-            : [],
-          problem: String(report.problem || ''),
-          action: String(report.action || ''),
-          recommendation: String(report.recommendation || ''),
-          refNo: String(report.refNo || '')
-        }
-      : null;
 
   const machine = await updateMachine(
     { clientId, serialNo, model, dateInstalled },
@@ -115,12 +94,10 @@ router.post('/:clientId/machines/update', requireAuth, async (req, res) => {
       runningHours: parsedRunningHours,
       status: String(status),
       description: String(description || ''),
-      activityType: safeActivityType,
       maintenanceServiceDate: String(maintenanceServiceDate || ''),
       partServiceDates: partServiceDates && typeof partServiceDates === 'object' ? partServiceDates : {},
       partServiceHours: partServiceHours && typeof partServiceHours === 'object' ? partServiceHours : {},
-        updates: safeUpdates,
-        report: safeReport
+      updates: safeUpdates
     }
   );
 
@@ -154,8 +131,7 @@ router.post('/:clientId/machines/report', requireAuth, async (req, res) => {
       : [],
     problem: String(report.problem || ''),
     action: String(report.action || ''),
-    recommendation: String(report.recommendation || ''),
-    refNo: String(report.refNo || '')
+    recommendation: String(report.recommendation || '')
   };
 
   const machine = await appendMachineReport(

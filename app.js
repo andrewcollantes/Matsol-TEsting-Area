@@ -19,16 +19,10 @@ app.use(compression());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(sessionMiddleware);
+// Serve public assets (now organized by feature in public/js/<feature>/, public/css/<feature>/)
 app.use(
   express.static(path.join(__dirname, 'public'), {
-    maxAge: isProd ? '1d' : 0,
-    setHeaders: (res, filePath) => {
-      if (!isProd) {
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-      }
-    }
+    maxAge: isProd ? '1d' : 0
   })
 );
 

@@ -28,42 +28,12 @@ const SEED_ACCOUNTS = [
   }
 ];
 
-const REAL_USER_NAMES = [
-  'Gabriela Alexie Mercado Gonzales',
-  'Christine Anne Par',
-  'Alano Perlas Francisco',
-  'Eric Asi Tanas',
-  'Moises Calatrava Abaja',
-  'Michael Guevara Abellanida',
-  'Eric Oberos Arce',
-  'Andelbert Largabo Aspa',
-  'Niño Agdan Aurellano',
-  'Niño Cario Beguiras Barcebai',
-  'Donald Pecaña De Los Santos',
-  'Jolo Arroyo Espinosa',
-  'Garry Molbog Limpiada',
-  'Ivan Neil Panopio Macasaet',
-  'Jerome Zarsuelo Macasinag',
-  'Renato Turcolas Mendoza',
-  'AJ Christopher Tanuga Muellenero',
-  'Renard Mabingnay Riano',
-  'Romulo Alvin Gonzales San Miguel',
-  'Reymond Naa Sarto',
-  'Julio Rio Sumalinog Tonquin'
-];
-
-for (let index = 1; index <= 20; index += 1) {
-  const suffix = String(index).padStart(2, '0');
-  SEED_ACCOUNTS.push({
-    username: `user_${suffix}`,
-    passwordHash: '$2a$10$i.4ePyGvZY2JTTRStKhVm.0OV/xqzH/qQDWT6FDFDyZMM/SjX/Cda',
-    role: 'user',
-    fullName: REAL_USER_NAMES[index - 1],
-    department: 'OPERATIONS',
-    branch: 'Davao',
-    status: 'active'
-  });
-}
+// NOTE:
+// The original seed data included a list of real employee names for demonstration purposes.
+// To prevent unintended exposure of names when no external database is configured,
+// we intentionally omit those demo employees from the seed state. Only two accounts
+// (an administrator and a generic user) are seeded. Additional user accounts should
+// be created through the application's UI or via an actual database.
 
 const SEED_CLIENTS = [
   { id: 'cdo', name: 'CDO', location: 'Patricia Murillo', status: 'active' },
@@ -445,7 +415,11 @@ function createSeedState() {
 
 function normalizeStateShape(candidate) {
   const source = candidate && typeof candidate === 'object' ? candidate : {};
-  const accounts = Array.isArray(source.accounts) ? source.accounts.map(mapAccountRow) : createSeedState().accounts;
+  // Regardless of the persisted state, always use the seed accounts defined in this module.
+  // This prevents the application from carrying over demo employee names when no external
+  // database is configured. Admins can still create additional users via the UI, but
+  // those should be persisted in a proper database rather than in the code.
+  const accounts = createSeedState().accounts;
   const clients = Array.isArray(source.clients) ? source.clients.map(mapClientRow) : createSeedState().clients;
   const invites = Array.isArray(source.invites) ? source.invites.map(mapInviteRow) : [];
   const passwordResets = Array.isArray(source.passwordResets)

@@ -1,188 +1,264 @@
-const { getDb, persistDb } = require('./memory');
+const db = require("./mysql");
 
-function cloneMap(value) {
-  return value && typeof value === 'object' ? { ...value } : {};
-}
+async function findMachineForKey(key) {
+  if (key && key.id) {
+    const [byId] = await db.execute(
+      "SELECT * FROM machines WHERE id = ? LIMIT 1",
+      [key.id]
+    );
 
-function cloneReport(report) {
-  if (!report || typeof report !== 'object') {
-    return null;
+    if (byId.length) {
+      return byId[0];
+    }
   }
 
-  return {
-    ...report,
-    technicians: Array.isArray(report.technicians) ? report.technicians.map(name => String(name || '')) : []
-  };
+  const [rows] = await db.execute(
+    `SELECT * FROM machines
+     WHERE LOWER(clientId) = ?
+       AND LOWER(serialNo) = ?
+       AND LOWER(model) = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [
+      String(key.clientId || "").trim().toLowerCase(),
+      String(key.serialNo || "").trim().toLowerCase(),
+      String(key.model || "").trim().toLowerCase()
+    ]
+  );
+
+  return rows[0] || null;
 }
 
-function cloneUpdate(update) {
-  if (!update || typeof update !== 'object') {
-    return {};
+function safeJson(value, fallback) {
+  try {
+    if (value === null || value === undefined || value === "") return fallback;
+    if (typeof value === "string") return JSON.parse(value);
+    return value;
+  } catch {
+    return fallback;
+  }
+}
+
+function stringifyJson(value, fallback) {
+  return JSON.stringify(value === undefined ? fallback : value);
+}
+
+function toMysqlDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slash) {
+    const day = slash[1].padStart(2, "0");
+    const month = slash[2].padStart(2, "0");
+    const year = slash[3];
+    return `${year}-${month}-${day}`;
   }
 
-  return {
-    ...update,
-    partsUpdated: Array.isArray(update.partsUpdated) ? update.partsUpdated.map(name => String(name || '')) : [],
-    partServiceDates: cloneMap(update.partServiceDates),
-    partServiceHours: cloneMap(update.partServiceHours),
-    report: cloneReport(update.report)
-  };
+  return null;
 }
 
-function cloneMachine(machine) {
+function toDisplayDate(value) {
+  if (!value) return "";
+
+  const raw = value instanceof Date
+    ? value.toISOString().slice(0, 10)
+    : String(value).slice(0, 10);
+
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return String(value);
+
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+function mapMachine(row) {
+  const technicians = safeJson(row.technicians, []);
+  const partServiceDates = safeJson(row.partServiceDates, {});
+  const partServiceHours = safeJson(row.partServiceHours, {});
+  const updates = safeJson(row.updates, []);
+  const reports = safeJson(row.reports, []);
+
   return {
-    ...machine,
-    technicians: Array.isArray(machine.technicians) ? machine.technicians.map(name => String(name || '')) : [],
-    partServiceDates: cloneMap(machine.partServiceDates),
-    partServiceHours: cloneMap(machine.partServiceHours),
-    initialPartServiceDates: cloneMap(machine.initialPartServiceDates),
-    initialPartServiceHours: cloneMap(machine.initialPartServiceHours),
-    updates: Array.isArray(machine.updates) ? machine.updates.map(cloneUpdate) : [],
-    reports: Array.isArray(machine.reports) ? machine.reports.map(cloneReport).filter(Boolean) : []
+    id: row.id,
+    clientId: row.clientId || "",
+    clientName: row.clientName || "",
+    location: row.location || "",
+    unit: row.unit || "",
+    model: row.model || "",
+    serialNo: row.serialNo || "",
+    dateInstalled: toDisplayDate(row.dateInstalled),
+    runningHours: Number(row.runningHours || 0),
+    status: row.status || "",
+    description: row.description || "",
+    submittedBy: row.submittedBy || "",
+    technicians,
+    maintenanceServiceDate: row.maintenanceServiceDate || "",
+    partServiceDates,
+    partServiceHours,
+    updates,
+    reports,
+    initialRunningHours: Number(row.initialRunningHours || row.runningHours || 0),
+    initialStatus: row.initialStatus || row.status || "",
+    initialDescription: row.initialDescription || row.description || "",
+    initialMaintenanceServiceDate: row.initialMaintenanceServiceDate || row.maintenanceServiceDate || "",
+    initialPartServiceDates: safeJson(row.initialPartServiceDates, partServiceDates),
+    initialPartServiceHours: safeJson(row.initialPartServiceHours, partServiceHours)
   };
 }
 
 async function listMachinesByClientId(clientId) {
-  const key = String(clientId || '').trim().toLowerCase();
-  const db = await getDb();
-  return db.machines
-    .filter(machine => String(machine.clientId || '').trim().toLowerCase() === key)
-    .slice()
-    .reverse()
-    .map(cloneMachine);
+  const [rows] = await db.execute(
+    "SELECT * FROM machines WHERE clientId = ? ORDER BY id DESC",
+    [String(clientId || "").trim().toLowerCase()]
+  );
+
+  return rows.map(mapMachine);
 }
 
 async function listAllMachines() {
-  const db = await getDb();
-  return db.machines.slice().map(cloneMachine);
+  const [rows] = await db.query("SELECT * FROM machines ORDER BY id DESC");
+  return rows.map(mapMachine);
 }
 
 async function addMachine(machine) {
-  const db = await getDb();
-  const clientIdKey = String(machine.clientId || '').trim().toLowerCase();
-  const identity = {
-    clientId: clientIdKey,
-    clientName: machine.clientName ? String(machine.clientName) : null,
-    location: machine.location ? String(machine.location) : null,
-    unit: machine.unit ? String(machine.unit) : null,
-    model: String(machine.model || '').trim(),
-    serialNo: String(machine.serialNo || '').trim(),
-    dateInstalled: String(machine.dateInstalled || '').trim(),
-    runningHours: Number.isFinite(Number(machine.runningHours)) ? Number(machine.runningHours) : 0,
-    status: machine.status ? String(machine.status) : null,
-    description: machine.description ? String(machine.description) : '',
-    submittedBy: machine.submittedBy ? String(machine.submittedBy) : null,
-    technicians: Array.isArray(machine.technicians) ? machine.technicians.map(name => String(name || '')) : [],
-    maintenanceServiceDate: machine.maintenanceServiceDate ? String(machine.maintenanceServiceDate) : '',
-    partServiceDates: cloneMap(machine.partServiceDates),
-    partServiceHours: cloneMap(machine.partServiceHours),
-    updates: Array.isArray(machine.updates) ? machine.updates.map(cloneUpdate) : [],
-    reports: Array.isArray(machine.reports) ? machine.reports.map(cloneReport).filter(Boolean) : [],
-    initialRunningHours: Number.isFinite(Number(machine.runningHours)) ? Number(machine.runningHours) : 0,
-    initialStatus: machine.status ? String(machine.status) : null,
-    initialDescription: machine.description ? String(machine.description) : '',
-    initialMaintenanceServiceDate: machine.maintenanceServiceDate ? String(machine.maintenanceServiceDate) : '',
-    initialPartServiceDates: cloneMap(machine.partServiceDates),
-    initialPartServiceHours: cloneMap(machine.partServiceHours)
-  };
-
-  db.machines.push(identity);
-  await persistDb();
+  await db.execute(
+    `INSERT INTO machines
+    (
+      clientId, clientName, location, unit, model, serialNo, dateInstalled,
+      runningHours, status, description, submittedBy, technicians,
+      maintenanceServiceDate, partServiceDates, partServiceHours, updates, reports,
+      initialRunningHours, initialStatus, initialDescription,
+      initialMaintenanceServiceDate, initialPartServiceDates, initialPartServiceHours
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      String(machine.clientId || "").trim().toLowerCase(),
+      machine.clientName || "",
+      machine.location || "",
+      machine.unit || "",
+      machine.model || "",
+      machine.serialNo || "",
+      toMysqlDate(machine.dateInstalled),
+      Number(machine.runningHours || 0),
+      machine.status || "",
+      machine.description || "",
+      machine.submittedBy || "",
+      stringifyJson(machine.technicians, []),
+      toMysqlDate(machine.maintenanceServiceDate),
+      stringifyJson(machine.partServiceDates, {}),
+      stringifyJson(machine.partServiceHours, {}),
+      stringifyJson(machine.updates, []),
+      stringifyJson(machine.reports, []),
+      Number(machine.runningHours || 0),
+      machine.status || "",
+      machine.description || "",
+      toMysqlDate(machine.maintenanceServiceDate),
+      stringifyJson(machine.partServiceDates, {}),
+      stringifyJson(machine.partServiceHours, {})
+    ]
+  );
 }
 
 async function updateMachine(key, updates) {
-  const db = await getDb();
-  const target = db.machines.find(machine => (
-    String(machine.clientId || '').trim().toLowerCase() === String(key.clientId || '').trim().toLowerCase() &&
-    String(machine.serialNo || '').trim().toLowerCase() === String(key.serialNo || '').trim().toLowerCase() &&
-    String(machine.model || '').trim().toLowerCase() === String(key.model || '').trim().toLowerCase() &&
-    String(machine.dateInstalled || '').trim() === String(key.dateInstalled || '').trim()
-  ));
+  const found = await findMachineForKey(key);
 
-  if (!target) {
-    return null;
-  }
+if (!found) return null;
 
-  target.runningHours = Number.isFinite(Number(updates.runningHours)) ? Number(updates.runningHours) : target.runningHours;
-  target.status = updates.status !== undefined ? String(updates.status) : target.status;
-  target.description = updates.description !== undefined ? String(updates.description || '') : target.description;
-  target.maintenanceServiceDate = updates.maintenanceServiceDate !== undefined ? String(updates.maintenanceServiceDate || '') : target.maintenanceServiceDate;
-  target.partServiceDates = updates.partServiceDates && typeof updates.partServiceDates === 'object'
-    ? cloneMap(updates.partServiceDates)
-    : target.partServiceDates;
-  target.partServiceHours = updates.partServiceHours && typeof updates.partServiceHours === 'object'
-    ? cloneMap(updates.partServiceHours)
-    : target.partServiceHours;
-  target.updates = Array.isArray(updates.updates)
-    ? updates.updates.map(cloneUpdate)
-    : target.updates;
+const current = mapMachine(found);
 
-  const report = cloneReport(updates.report);
-  if (report) {
-    target.reports = Array.isArray(target.reports) ? target.reports.slice() : [];
-    const reportIndex = Number(report.updateIndex);
-    const hasRequestedIndex = Number.isInteger(reportIndex) && reportIndex >= 0 && reportIndex < target.updates.length;
-    const updateTarget = hasRequestedIndex
-      ? target.updates[reportIndex]
-      : target.updates[target.updates.length - 1];
+  const next = {
+    runningHours: updates.runningHours !== undefined ? Number(updates.runningHours || 0) : current.runningHours,
+    status: updates.status !== undefined ? String(updates.status || "") : current.status,
+    description: updates.description !== undefined ? String(updates.description || "") : current.description,
+    maintenanceServiceDate: updates.maintenanceServiceDate !== undefined ? String(updates.maintenanceServiceDate || "") : current.maintenanceServiceDate,
+    partServiceDates: updates.partServiceDates || current.partServiceDates,
+    partServiceHours: updates.partServiceHours || current.partServiceHours,
+    updates: Array.isArray(updates.updates) ? updates.updates : current.updates
+  };
 
-    if (updateTarget) {
-      updateTarget.submittedBy = String(report.submittedBy || updateTarget.submittedBy || 'Unknown User');
-      updateTarget.report = cloneReport(report);
-    }
+  await db.execute(
+    `UPDATE machines
+     SET runningHours = ?, status = ?, description = ?, maintenanceServiceDate = ?,
+         partServiceDates = ?,
+         partServiceHours = ?,
+         updates = ?
+     WHERE id = ?`,
+    [
+      next.runningHours,
+      next.status,
+      next.description,
+      next.maintenanceServiceDate,
+      stringifyJson(next.partServiceDates, {}),
+      stringifyJson(next.partServiceHours, {}),
+      stringifyJson(next.updates, []),
+      found.id
+    ]
+  );
 
-    const existingReportIndex = target.reports.findIndex(existing => (
-      Number(existing && existing.updateIndex) === Number(report.updateIndex) &&
-      String(existing && existing.date || '').trim() === String(report.date || '').trim()
-    ));
-
-    if (existingReportIndex >= 0) {
-      target.reports[existingReportIndex] = report;
-    } else {
-      target.reports.push(report);
-    }
-  }
-
-  await persistDb();
-
-  return cloneMachine(target);
+  const [updated] = await db.execute("SELECT * FROM machines WHERE id = ?", [found.id]);
+  return updated[0] ? mapMachine(updated[0]) : null;
 }
 
 async function appendMachineReport(key, report) {
-  const db = await getDb();
-  const target = db.machines.find(machine => (
-    String(machine.clientId || '').trim().toLowerCase() === String(key.clientId || '').trim().toLowerCase() &&
-    String(machine.serialNo || '').trim().toLowerCase() === String(key.serialNo || '').trim().toLowerCase() &&
-    String(machine.model || '').trim().toLowerCase() === String(key.model || '').trim().toLowerCase() &&
-    String(machine.dateInstalled || '').trim() === String(key.dateInstalled || '').trim()
-  ));
+  const [found] = await db.execute(
+    `SELECT * FROM machines
+     WHERE clientId = ? AND serialNo = ? AND model = ? AND dateInstalled = ?
+     LIMIT 1`,
+    [
+      String(key.clientId || "").trim().toLowerCase(),
+      String(key.serialNo || "").trim(),
+      String(key.model || "").trim(),
+      toMysqlDate(key.dateInstalled)
+    ]
+  );
 
-  if (!target) {
-    return null;
-  }
+  if (!found.length) return null;
 
-  const reports = Array.isArray(target.reports) ? target.reports.slice() : [];
-  const updates = Array.isArray(target.updates) ? target.updates.slice() : [];
-  reports.push(cloneReport(report));
+  const current = mapMachine(found[0]);
+  const reports = Array.isArray(current.reports) ? current.reports.slice() : [];
+  const updates = Array.isArray(current.updates) ? current.updates.slice() : [];
 
-  // Keep Machine History aligned with the saved report team and tie report to update row.
+  reports.push(report);
+
   if (report && report.submittedBy && updates.length > 0) {
     const requestedIndex = Number(report.updateIndex);
-    const hasRequestedIndex = Number.isInteger(requestedIndex) && requestedIndex >= 0 && requestedIndex < updates.length;
-    const updateTarget = hasRequestedIndex
-      ? updates[requestedIndex]
-      : updates[updates.length - 1];
+    const updateTarget =
+      Number.isInteger(requestedIndex) && requestedIndex >= 0 && requestedIndex < updates.length
+        ? updates[requestedIndex]
+        : updates[updates.length - 1];
 
     updateTarget.submittedBy = String(report.submittedBy);
-    updateTarget.report = cloneReport(report);
+    updateTarget.report = report;
   }
 
-  target.reports = reports;
-  target.updates = updates;
+  await db.execute(
+    `UPDATE machines
+     SET reports = ?, updates = ?
+     WHERE id = ?`,
+    [
+      stringifyJson(reports, []),
+      stringifyJson(updates, []),
+      found.id
+    ]
+  );
 
-  await persistDb();
+  await db.execute(
+    `INSERT INTO machine_reports
+    (machine_id, technicians, problem, action_taken, recommendation)
+    VALUES (?, ?, ?, ?, ?)`,
+    [
+      found.id,
+      Array.isArray(report.technicians) ? report.technicians.join(", ") : "",
+      report.problem || "",
+      report.action || report.action_taken || "",
+      report.recommendation || ""
+    ]
+  );
 
-  return cloneMachine(target);
+  const [updated] = await db.execute("SELECT * FROM machines WHERE id = ?", [found.id]);
+  return updated[0] ? mapMachine(updated[0]) : null;
 }
 
 module.exports = {
